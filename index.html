@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'"
+    />
+    <meta
+      http-equiv="X-Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'"
+    />
+    <link rel="stylesheet" href="./css/bootstrap.css">
+    <link rel="stylesheet" href="./css/index.css" />
+    <title>YT 下載器</title>
+  </head>
+  <body class="vh-100 d-flex align-items-center">
+    <div class="container h-100">
+      <div class="mb-3">
+        <label class="form-label">影片網址</label>
+        <input type="text" class="form-control video-url" id="video-url" placeholder="請貼上 YouTube 影片網址">
+      </div>
+      <div class="mb-3">
+        <label for="">輸出格式</label>
+        <select class="form-select outputSelect" id="outputSelect" aria-label="Default select example">
+          <option value="mp4" data-cmd="mp4">mp4</option>
+          <option value="mp3" data-cmd="mp3">mp3</option>
+        </select>
+      </div>
+      <div class="mb-3 text-end">
+        <button id="download-btn" class="btn btn-primary">下載</button>
+      </div>
+      <div class="mb-3">
+        <label for="output" class="form-label">輸出訊息</label>
+        <textarea class="form-control" id="output" rows="10" readonly></textarea>
+      </div>
+    </div>
+    <script src="./js/renderer.js" defer></script>
+  </body>
+</html>
