@@ -1,62 +1,17 @@
-const { ipcRenderer } = require('electron');
-
-const downloadBtn = document.getElementById('download-btn');
-const outputSelectEl = document.getElementById('outputSelect');
-const outputContent = document.getElementById('output');
-
-
-const startDownload = () => {
-  const videoUrlEl = document.getElementById('video-url');
-  const videoUrl = videoUrlEl.value.trim();
-
-  // 修正：檢查 URL 字串是否為空
-  if (!videoUrl) {
-    outputContent.value = '請輸入影片網址';
-    return;
-  }
-
-  const format = outputSelectEl.value;
-
-  const args = [
-    // 建議指定一個輸出目錄，這裡會存在應用程式執行目錄下的 Downloads 資料夾
-    '--output',
-    '--ffmpeg-location', 
-    './FFmpeg/bin'
-  ];
-
-  if (format === 'mp4') {
-    args.push('--merge-output-format', 'mp4');
-  } else if (format === 'mp3') {
-    args.push(
-      '--extract-audio',
-      '--audio-format', 'mp3',
-      // 使用 '0' 來獲取最佳 VBR 品質
-      '--audio-quality', '0'
-    );
-  }
-
-  // 修正：將影片 URL「字串」作為最後一個參數，而不是整個 input 元素
-  args.push(videoUrl);
-
-  // 清除先前的訊息並顯示正在執行的命令
-  outputContent.value = `執行命令: yt-dlp ${args.join(' ')}\n\n`;
-
-  // 發送下載請求到主進程
-  ipcRenderer.send('download-video', args);
-};
-
-// 將下載函式綁定到按鈕的點擊事件
-downloadBtn.addEventListener('click', startDownload);
-
-// 監聽來自 main process 的進度更新
-ipcRenderer.on('download-progress', (event, data) => {
-  outputContent.value += data;
-  // 自動捲動到底部
-  outputContent.scrollTop = outputContent.scrollHeight;
-});
-
-// 監聽來自 main process 的完成訊息
-ipcRenderer.on('download-complete', (event, message) => {
-  outputContent.value += `\n${message}\n`;
-  outputContent.scrollTop = outputContent.scrollHeight;
-});
+const $=id=>document.getElementById(id);
+const state={queue:[],running:false,current:-1};
+function log(message){const line=typeof message==="string"?message:JSON.stringify(message);$("log").textContent+=line.endsWith("\n")?line:line+"\n";$("log").scrollTop=$("log").scrollHeight}
+function urls(){return $("video-url").value.split(/\r?\n/).map(v=>v.trim()).filter(Boolean)}
+function esc(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+function renderQueue(){const el=$("queue");if(!state.queue.length){el.className="queue-empty";el.textContent="尚未加入下載項目";return}el.className="";el.innerHTML=state.queue.map((x,i)=>'<div class="queue-item"><span class="queue-number">'+String(i+1).padStart(2,"0")+'</span><span class="queue-url" title="'+esc(x.url)+'">'+esc(x.url)+'</span><span class="queue-status">'+(i===state.current?"下載中":x.status)+'</span></div>').join("")}
+function opts(){return{mode:$("mode").value,resolution:$("resolution").value,container:$("container").value,audioFormat:$("audio-format").value,audioQuality:$("audio-quality").value,formatCode:$("format-code").value.trim(),playlist:$("playlist").checked,subtitles:$("subtitles").checked,autoSubs:$("auto-subs").checked,thumbnail:$("thumbnail").checked,metadata:$("metadata").checked,archive:$("archive").checked,proxy:$("proxy").value.trim(),rateLimit:$("rate-limit").value.trim(),fragments:$("fragments").value,retries:$("retries").value,cookies:$("cookies").value,extraArgs:$("extra-args").value.trim(),outputPath:$("output-path").value||""}}
+function setMode(){$("video-options").classList.toggle("hidden",$("mode").value!=="video");$("audio-options").classList.toggle("hidden",$("mode").value!=="audio");$("custom-options").classList.toggle("hidden",$("mode").value!=="custom")}
+$("mode").addEventListener("change",setMode);$("advanced-toggle").onclick=()=>$("advanced-panel").classList.toggle("hidden");$("clear-urls").onclick=()=>{$("video-url").value="";$("media-info").classList.add("hidden")};$("clear-log").onclick=()=>{$("log").textContent=""};
+$("folder-btn").onclick=async()=>{const p=await window.ytDlp.chooseFolder();if(p)$("output-path").value=p};
+$("inspect-btn").onclick=async()=>{const list=urls();if(!list.length){log("請先輸入 URL");return}$("inspect-btn").disabled=true;try{const r=await window.ytDlp.getInfo(list[0],{playlist:$("playlist").checked});if(!r.ok){log(r.error);return}$("media-info").classList.remove("hidden");$("media-info").innerHTML="<strong>"+esc(r.title||"未知標題")+"</strong><span>"+esc(r.uploader||"未知頻道")+" · "+esc(r.durationText||"未知時長")+" · "+r.formats+" 個格式</span>";log("已解析："+(r.title||list[0]))}finally{$("inspect-btn").disabled=false}};
+$("add-queue").onclick=()=>{const list=urls();if(!list.length){log("請先輸入 URL");return}let added=0;for(const url of list)if(!state.queue.some(x=>x.url===url)){state.queue.push({url,status:"等待中"});added++}$("video-url").value="";renderQueue();log("加入 "+added+" 個網址")};
+async function start(){if(state.running)return;if(!state.queue.length){$("add-queue").click();if(!state.queue.length)return}state.running=true;$("download-btn").classList.add("hidden");$("cancel-btn").classList.remove("hidden");$("progress-wrap").classList.remove("hidden");for(let i=0;i<state.queue.length;i++){if(!state.running)break;if(state.queue[i].status==="完成")continue;state.current=i;state.queue[i].status="下載中";renderQueue();$("progress-bar").style.width="0%";$("progress-percent").textContent="0%";$("progress-text").textContent="下載中";const r=await window.ytDlp.startDownload({url:state.queue[i].url,options:opts()});state.queue[i].status=r.ok?"完成":"失敗";renderQueue()}state.current=-1;state.running=false;$("download-btn").classList.remove("hidden");$("cancel-btn").classList.add("hidden");renderQueue()}
+$("download-btn").onclick=start;$("cancel-btn").onclick=async()=>{state.running=false;await window.ytDlp.cancelDownload();log("已要求取消目前下載")};
+window.ytDlp.onProgress(d=>{$("progress-bar").style.width=Math.max(0,Math.min(100,Number(d.percent||0)))+"%";$("progress-percent").textContent=Number(d.percent||0).toFixed(1)+"%";$("progress-text").textContent=d.status==="finished"?"處理中":"下載中";$("speed").textContent=d.speed||"—";$("eta").textContent=d.eta?"剩餘時間 "+d.eta:"剩餘時間 —"});
+window.ytDlp.onLog(log);window.ytDlp.onComplete(d=>log(d.message||d));
+(async()=>{try{const r=await window.ytDlp.checkTools();$("tool-status").textContent=r.ytDlp?"yt-dlp 已就緒":"找不到 yt-dlp";if(!r.ffmpeg)log("提示：找不到 ffmpeg；需要合併影音或轉檔時可能失敗。");if(!r.ytDlp)log("請將 yt-dlp 加入 PATH，或放到系統可執行路徑。")}catch(e){log(e.message)}})();renderQueue();setMode();
