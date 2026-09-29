@@ -1,41 +1,147 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'"
-    />
-    <meta
-      http-equiv="X-Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'"
-    />
-    <link rel="stylesheet" href="./css/bootstrap.css">
-    <link rel="stylesheet" href="./css/index.css" />
-    <title>YT 下載器</title>
-  </head>
-  <body class="vh-100 d-flex align-items-center">
-    <div class="container h-100">
-      <div class="mb-3">
-        <label class="form-label">影片網址</label>
-        <input type="text" class="form-control video-url" id="video-url" placeholder="請貼上 YouTube 影片網址">
-      </div>
-      <div class="mb-3">
-        <label for="">輸出格式</label>
-        <select class="form-select outputSelect" id="outputSelect" aria-label="Default select example">
-          <option value="mp4" data-cmd="mp4">mp4</option>
-          <option value="mp3" data-cmd="mp3">mp3</option>
-        </select>
-      </div>
-      <div class="mb-3 text-end">
-        <button id="download-btn" class="btn btn-primary">下載</button>
-      </div>
-      <div class="mb-3">
-        <label for="output" class="form-label">輸出訊息</label>
-        <textarea class="form-control" id="output" rows="10" readonly></textarea>
-      </div>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>yt-dlp EZ Downloader</title>
+  <link rel="stylesheet" href="./css/index.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <div class="eyebrow">YT-DLP DESKTOP GUI</div>
+      <h1>yt-dlp EZ Downloader</h1>
+      <p>一個完整、直覺的 yt-dlp 桌面下載器</p>
     </div>
-    <script src="./js/renderer.js" defer></script>
-  </body>
+    <div id="tool-status" class="status-pill">檢查環境中…</div>
+  </header>
+
+  <main class="layout">
+    <section class="card">
+      <div class="section-title">
+        <div><span class="step">01</span><h2>加入下載</h2></div>
+        <button id="clear-urls" class="button ghost small">清除</button>
+      </div>
+      <label for="video-url">影片 / 播放清單網址</label>
+      <div class="url-row">
+        <textarea id="video-url" rows="3" placeholder="貼上 URL，可一次輸入多個網址，每行一個"></textarea>
+        <button id="inspect-btn" class="button secondary">解析資訊</button>
+      </div>
+      <div id="media-info" class="media-info hidden"></div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <div class="section-title"><div><span class="step">02</span><h2>格式與品質</h2></div></div>
+        <label for="mode">下載模式</label>
+        <select id="mode">
+          <option value="video">影片（自動最佳畫質）</option>
+          <option value="audio">純音訊</option>
+          <option value="custom">自訂格式</option>
+        </select>
+
+        <div id="video-options" class="options">
+          <label for="resolution">最高影片解析度</label>
+          <select id="resolution">
+            <option value="best">最佳可用</option>
+            <option value="2160">2160p (4K)</option>
+            <option value="1440">1440p</option>
+            <option value="1080">1080p</option>
+            <option value="720">720p</option>
+            <option value="480">480p</option>
+            <option value="360">360p</option>
+          </select>
+          <label for="container">輸出容器</label>
+          <select id="container">
+            <option value="mp4">MP4</option>
+            <option value="mkv">MKV</option>
+            <option value="webm">WebM</option>
+          </select>
+        </div>
+
+        <div id="audio-options" class="options hidden">
+          <label for="audio-format">音訊格式</label>
+          <select id="audio-format">
+            <option value="mp3">MP3</option>
+            <option value="m4a">M4A</option>
+            <option value="opus">Opus</option>
+            <option value="flac">FLAC</option>
+            <option value="wav">WAV</option>
+          </select>
+          <label for="audio-quality">音訊品質</label>
+          <select id="audio-quality">
+            <option value="0">最佳</option>
+            <option value="2">高</option>
+            <option value="5">標準</option>
+            <option value="7">較省空間</option>
+          </select>
+        </div>
+
+        <div id="custom-options" class="options hidden">
+          <label for="format-code">yt-dlp format selector</label>
+          <input id="format-code" value="bv*+ba/b" placeholder="例如：bv*[height<=1080]+ba/b">
+          <p class="hint">直接使用 yt-dlp 的 <code>-f</code> 格式選擇語法。</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title"><div><span class="step">03</span><h2>輸出與選項</h2></div></div>
+        <label for="output-path">下載位置</label>
+        <div class="path-row">
+          <input id="output-path" value="" readonly>
+          <button id="folder-btn" class="button ghost">選擇</button>
+        </div>
+
+        <div class="checks">
+          <label class="check"><input type="checkbox" id="playlist"> 允許下載播放清單</label>
+          <label class="check"><input type="checkbox" id="subtitles"> 下載字幕</label>
+          <label class="check"><input type="checkbox" id="auto-subs"> 自動產生字幕</label>
+          <label class="check"><input type="checkbox" id="thumbnail"> 嵌入縮圖</label>
+          <label class="check"><input type="checkbox" id="metadata" checked> 嵌入 metadata</label>
+          <label class="check"><input type="checkbox" id="archive"> 略過已下載項目</label>
+        </div>
+      </div>
+    </section>
+
+    <section class="card advanced">
+      <button id="advanced-toggle" class="advanced-toggle">進階設定 <span>⌄</span></button>
+      <div id="advanced-panel" class="advanced-panel hidden">
+        <div class="grid three">
+          <div><label for="proxy">Proxy</label><input id="proxy" placeholder="http://127.0.0.1:7890"></div>
+          <div><label for="rate-limit">速度上限</label><input id="rate-limit" placeholder="例如 5M、500K"></div>
+          <div><label for="fragments">並行 fragments</label><input id="fragments" type="number" min="1" max="32" value="4"></div>
+        </div>
+        <div class="grid three">
+          <div><label for="retries">重試次數</label><input id="retries" type="number" min="0" value="10"></div>
+          <div><label for="cookies">Cookies</label><select id="cookies"><option value="">不使用</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="firefox">Firefox</option><option value="brave">Brave</option></select></div>
+          <div><label for="extra-args">額外 yt-dlp 參數</label><input id="extra-args" placeholder="例如 --write-info-json"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card queue-card">
+      <div class="section-title">
+        <div><span class="step">04</span><h2>下載佇列</h2></div>
+        <div class="queue-actions">
+          <button id="add-queue" class="button ghost">加入佇列</button>
+          <button id="download-btn" class="button primary">開始下載</button>
+          <button id="cancel-btn" class="button danger hidden">取消</button>
+        </div>
+      </div>
+      <div id="queue" class="queue-empty">尚未加入下載項目</div>
+      <div class="progress-wrap hidden" id="progress-wrap">
+        <div class="progress-meta"><span id="progress-text">準備中</span><span id="progress-percent">0%</span></div>
+        <div class="progress"><div id="progress-bar"></div></div>
+        <div class="speed-line"><span id="speed">—</span><span id="eta">剩餘時間 —</span></div>
+      </div>
+    </section>
+
+    <section class="card log-card">
+      <div class="section-title"><div><span class="step">05</span><h2>執行日誌</h2></div><button id="clear-log" class="button ghost small">清除</button></div>
+      <pre id="log"></pre>
+    </section>
+  </main>
+  <script src="./js/renderer.js"></script>
+</body>
 </html>
