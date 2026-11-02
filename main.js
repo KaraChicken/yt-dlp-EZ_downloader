@@ -75,7 +75,7 @@ function createWindow() {
     if (targetUrl !== win.webContents.getURL()) event.preventDefault();
   });
   win.webContents.on("will-attach-webview", event => event.preventDefault());
-  win.on("closed", () => approvedOutputDirs.delete(win.webContents.id));
+  win.on("closed", () => approvedOutputDirs.delete(win.webContents.id); selectedMediaFiles.delete(win.webContents.id));
   win.loadFile(path.join(__dirname, "index.html"));
 }
 
@@ -113,20 +113,24 @@ ipcMain.handle("convert-media", async (event, format) => {
   if (!input) throw new Error("請先選擇要轉檔的影音檔案。");
   if (!Object.hasOwn(CONVERSION_FORMATS, format)) throw new Error("不支援的轉檔格式。");
   const win = BrowserWindow.fromWebContents(event.sender);
-  const result = await dialog.showSaveDialog(win, {
-    defaultPath: path.join(path.dirname(input), path.basename(input, path.extname(input)) + "." + format),
-    filters: [{ name: format.toUpperCase(), extensions: [format] }]
-  });
-  if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
-  const output = path.resolve(result.filePath);
-  if (output === input) throw new Error("輸出檔不能覆蓋來源檔。");
+  if (!win) throw new Error("視窗不存在。");
   const control = { child: null, cancelRequested: false };
   conversionJobs.set(event.sender.id, control);
   try {
+    const result = await dialog.showSaveDialog(win, {
+      defaultPath: path.join(path.dirname(input), path.basename(input, path.extname(input)) + "." + format),
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+      properties: ["showOverwriteConfirmation"]
+    });
+    if (result.canceled || !result.filePath || control.cancelRequested) return { ok: false, cancelled: true };
+    const output = path.resolve(result.filePath);
+    if (output === input) throw new Error("輸出檔不能覆蓋來源檔。");
+    if (path.extname(output).toLowerCase() !== "." + format) throw new Error("輸出副檔名必須是 ." + format + "。");
     await fs.access(input);
+    if (control.cancelRequested) return { ok: false, cancelled: true };
     return await new Promise(resolve => {
-      const args = ["-hide_banner","-nostdin","-y","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
-      const child = spawn("ffmpeg", args, { windowsHide: true, stdio: ["ignore","pipe","pipe"] });
+      const args = ["-hide_banner","-nostdin","-n","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
+      const child = spawn("ffmpeg", args, { windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore","pipe","pipe"] });
       control.child = child;
       let outputBuffer = "", errorBuffer = "", settled = false;
       const finish = value => { if (settled) return; settled = true; resolve(value); };
@@ -151,10 +155,13 @@ ipcMain.handle("convert-media", async (event, format) => {
         error: code === 0 ? null : errorBuffer.slice(-2000),
         output: code === 0 && !control.cancelRequested ? output : null
       }));
-      if (control.cancelRequested && child.pid) child.kill("SIGTERM");
+      if (control.cancelRequested && child.pid) {
+        if (process.platform === "win32") execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+        else { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
+      }
     });
   } finally {
-    conversionJobs.delete(event.sender.id);
+    if (conversionJobs.get(event.sender.id) === control) conversionJobs.delete(event.sender.id);
   }
 });
 ipcMain.handle("cancel-conversion", event => {
@@ -307,7 +314,7 @@ app.whenReady().then(() => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        "Content-Security-Policy": ["default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'"]
+        "Content-Security-Policy": ["default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' file:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'"]
       }
     });
   });
