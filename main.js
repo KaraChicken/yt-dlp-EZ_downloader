@@ -138,6 +138,10 @@ ipcMain.handle("convert-media", async (event, format) => {
     }
     await fs.access(input);
     if (control.cancelRequested) return { ok: false, cancelled: true };
+    const durationResult = await runCommand("ffprobe", ["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",input], 15000).catch(() => null);
+    const durationSeconds = durationResult ? Number(durationResult.stdout.trim()) : 0;
+    sendTo(event.sender, "conversion-progress", { duration: Number.isFinite(durationSeconds) ? durationSeconds : 0 });
+    if (control.cancelRequested) return { ok: false, cancelled: true };
     return await new Promise(resolve => {
       const args = ["-hide_banner","-nostdin","-n","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
       const child = spawn("ffmpeg", args, { windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore","pipe","pipe"] });
