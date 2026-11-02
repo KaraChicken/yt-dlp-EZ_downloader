@@ -129,7 +129,7 @@ ipcMain.handle("convert-media", async (event, format) => {
     await fs.access(input);
     if (control.cancelRequested) return { ok: false, cancelled: true };
     return await new Promise(resolve => {
-      const args = ["-hide_banner","-nostdin","-y","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
+      const args = ["-hide_banner","-nostdin","-n","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
       const child = spawn("ffmpeg", args, { windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore","pipe","pipe"] });
       control.child = child;
       let outputBuffer = "", errorBuffer = "", settled = false;
