@@ -196,6 +196,7 @@ state.unsubscribers.push(
 
 let mediaLoaded = false;
 let conversionRunning = false;
+let conversionDuration = 0;
 const mediaElements = [$("media-player"), $("audio-player")];
 $("open-media").addEventListener("click", async () => {
   try {
@@ -222,6 +223,7 @@ $("convert-btn").addEventListener("click", async () => {
   $("cancel-conversion-btn").classList.remove("hidden");
   $("conversion-status").textContent = "正在準備轉檔與選擇輸出位置…";
   $("conversion-log").textContent = "";
+  conversionDuration = 0;
   try {
     const result = await window.ytDlp.convertMedia($("conversion-format").value);
     if (result.cancelled) $("conversion-status").textContent = "已取消轉檔。";
@@ -241,8 +243,12 @@ $("cancel-conversion-btn").addEventListener("click", async () => {
 });
 state.unsubscribers.push(
   window.ytDlp.onConversionProgress(data => {
-    if (data.done) $("conversion-status").textContent = "轉檔即將完成…";
-    else if (Number.isFinite(data.seconds)) $("conversion-status").textContent = "轉檔中，已處理 " + Math.floor(data.seconds) + " 秒媒體時間";
+    if (Number.isFinite(data.duration) && data.duration > 0) conversionDuration = data.duration;
+    if (data.done) $("conversion-status").textContent = "轉檔即將完成（100%）…";
+    else if (Number.isFinite(data.seconds)) {
+      const percent = conversionDuration > 0 ? Math.min(100, data.seconds / conversionDuration * 100) : 0;
+      $("conversion-status").textContent = "轉檔中 " + (percent > 0 ? percent.toFixed(1) + "% · " : "") + Math.floor(data.seconds) + " 秒";
+    }
   }),
   window.ytDlp.onConversionLog(data => {
     $("conversion-log").textContent = ($("conversion-log").textContent + data).slice(-12000);
