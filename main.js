@@ -1,15 +1,205 @@
-const {app,BrowserWindow,ipcMain,dialog}=require("electron");
-const {spawn,execFile}=require("child_process");
-const path=require("path");
-let currentProcess=null;
-function createWindow(){const win=new BrowserWindow({width:1120,height:820,minWidth:850,minHeight:650,backgroundColor:"#0b1020",webPreferences:{preload:path.join(__dirname,"preload.js"),contextIsolation:true,nodeIntegration:false}});win.loadFile("index.html")}
-function runCommand(command,args){return new Promise((resolve,reject)=>{execFile(command,args,{windowsHide:true,maxBuffer:4*1024*1024},(error,stdout,stderr)=>error?reject(Object.assign(error,{stdout,stderr})):resolve({stdout,stderr}))})}
-function duration(s){if(!Number.isFinite(s))return "";const h=Math.floor(s/3600),m=Math.floor(s%3600/60),sec=Math.floor(s%60);return h?h+":"+String(m).padStart(2,"0")+":"+String(sec).padStart(2,"0"):m+":"+String(sec).padStart(2,"0")}
-function progress(line){const p=line.match(/(\d+(?:\.\d+)?)%/),sp=line.match(/at\s+([^\s]+\/s)/),eta=line.match(/ETA\s+([^\s]+)/);return{percent:p?parseFloat(p[1]):0,speed:sp?sp[1]:"",eta:eta?eta[1]:"",status:/100%/.test(line)?"finished":"downloading"}}
-function buildArgs(job){const o=job.options||{},a=["--newline","--no-color"];if(!o.playlist)a.push("--no-playlist");if(o.mode==="audio")a.push("-x","--audio-format",o.audioFormat||"mp3","--audio-quality",o.audioQuality||"0");else if(o.mode==="custom")a.push("-f",o.formatCode||"bv*+ba/b");else{const f=o.resolution&&o.resolution!=="best"?"bv*[height<="+o.resolution+"]+ba/b[height<="+o.resolution+"]/b":"bv*+ba/b";a.push("-f",f,"--merge-output-format",o.container||"mp4")}a.push("-o",path.join(o.outputPath||app.getPath("downloads"),"%(title)s.%(ext)s"));if(o.subtitles)a.push("--write-subs","--sub-langs","all");if(o.autoSubs)a.push("--write-auto-subs");if(o.thumbnail)a.push("--embed-thumbnail");if(o.metadata)a.push("--embed-metadata");if(o.archive)a.push("--download-archive",path.join(app.getPath("userData"),"download-archive.txt"));if(o.proxy)a.push("--proxy",o.proxy);if(o.rateLimit)a.push("--limit-rate",o.rateLimit);if(o.fragments)a.push("--concurrent-fragments",String(o.fragments));if(o.retries)a.push("--retries",String(o.retries));if(o.cookies)a.push("--cookies-from-browser",o.cookies);if(o.extraArgs){const extra=o.extraArgs.match(/(?:[^\s"]+|"[^"]*")+/g)||[];a.push(...extra.map(x=>x.replace(/^"|"$/g,"")))}a.push("--",job.url);return a}
-ipcMain.handle("check-tools",async()=>{const check=async n=>{try{const r=await runCommand(n,["--version"]);return r.stdout.trim()||r.stderr.trim()}catch{return null}};return{ytDlp:!!(await check("yt-dlp")),ffmpeg:!!(await check("ffmpeg"))}});
-ipcMain.handle("choose-folder",async e=>{const r=await dialog.showOpenDialog(BrowserWindow.fromWebContents(e.sender),{properties:["openDirectory"]});return r.canceled?null:r.filePaths[0]});
-ipcMain.handle("get-info",async(e,{url,options})=>{try{const a=["--dump-single-json","--no-warnings"];if(!options?.playlist)a.push("--no-playlist");a.push("--",url);const r=await runCommand("yt-dlp",a),i=JSON.parse(r.stdout);return{ok:true,title:i.title,uploader:i.uploader,durationText:duration(i.duration),formats:(i.formats||[]).length}}catch(err){return{ok:false,error:(err.stderr||err.stdout||err.message||"解析失敗").trim()}}});
-ipcMain.handle("cancel-download",()=>{if(currentProcess){currentProcess.kill();currentProcess=null}return true});
-ipcMain.handle("start-download",(e,job)=>new Promise(resolve=>{const win=BrowserWindow.fromWebContents(e.sender),a=buildArgs(job);win.webContents.send("download-log","\n$ yt-dlp "+a.map(x=>/\s/.test(x)?JSON.stringify(x):x).join(" ")+"\n");currentProcess=spawn("yt-dlp",a,{windowsHide:true});let buf="";const data=c=>{buf+=c.toString();const lines=buf.split(/\r?\n/);buf=lines.pop()||"";for(const line of lines){if(!line.trim())continue;win.webContents.send("download-log",line);if(/%/.test(line))win.webContents.send("download-progress",progress(line))}};currentProcess.stdout.on("data",data);currentProcess.stderr.on("data",data);currentProcess.on("error",err=>{currentProcess=null;win.webContents.send("download-log",err.message);resolve({ok:false,error:err.message})});currentProcess.on("close",code=>{currentProcess=null;const ok=code===0;win.webContents.send("download-complete",{message:ok?"下載完成":"下載失敗或已取消"});resolve({ok,error:ok?null:"exit code "+code})})}));
-app.whenReady().then(createWindow);app.on("window-all-closed",()=>{if(process.platform!=="darwin")app.quit()});app.on("activate",()=>{if(BrowserWindow.getAllWindows().length===0)createWindow()});
+const { app, BrowserWindow, ipcMain, dialog, session } = require("electron");
+const { spawn, execFile } = require("node:child_process");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const { fileURLToPath } = require("node:url");
+const { validateUrl, normalizeOptions, isYtDlpVersionSafe, buildArgs } = require("./security");
+
+const activeProcesses = new Map();
+const approvedOutputDirs = new Map();
+const INFO_TIMEOUT_MS = 45000;
+
+function isTrustedSender(event) {
+  const frame = event.senderFrame;
+  if (!frame || frame !== event.sender.mainFrame) return false;
+  try {
+    const url = new URL(frame.url);
+    return url.protocol === "file:" && path.resolve(fileURLToPath(frame.url)) === path.resolve(__dirname, "index.html");
+  } catch { return false; }
+}
+function assertTrustedSender(event) {
+  if (!isTrustedSender(event)) throw new Error("拒絕來自非信任頁面的 IPC 請求。");
+}
+function sendTo(sender, channel, payload) {
+  if (!sender.isDestroyed()) sender.send(channel, payload);
+}
+function runCommand(command, args, timeout = 15000) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { windowsHide: true, timeout, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) { error.stdout = stdout; error.stderr = stderr; reject(error); }
+      else resolve({ stdout, stderr });
+    });
+  });
+}
+function duration(seconds) {
+  if (!Number.isFinite(seconds)) return "";
+  const h = Math.floor(seconds / 3600), m = Math.floor(seconds % 3600 / 60), s = Math.floor(seconds % 60);
+  return h ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
+    : m + ":" + String(s).padStart(2, "0");
+}
+function progress(line) {
+  const percent = line.match(/(\d+(?:\.\d+)?)%/), speed = line.match(/at\s+([^\s]+\/s)/), eta = line.match(/ETA\s+([^\s]+)/);
+  return {
+    percent: percent ? Math.max(0, Math.min(100, Number(percent[1]))) : 0,
+    speed: speed ? speed[1] : "", eta: eta ? eta[1] : "",
+    status: /100%/.test(line) ? "finished" : "downloading"
+  };
+}
+async function getYtDlpVersion() {
+  const result = await runCommand("yt-dlp", ["--version"], 10000);
+  return (result.stdout || result.stderr).trim();
+}
+async function resolveOutputDir(senderId, requestedPath) {
+  const approved = approvedOutputDirs.get(senderId) || app.getPath("downloads");
+  if (typeof requestedPath === "string" && requestedPath && path.resolve(requestedPath) !== path.resolve(approved)) {
+    throw new Error("下載路徑未經本程式資料夾選擇器核准。");
+  }
+  const real = await fs.realpath(approved);
+  if (!(await fs.stat(real)).isDirectory()) throw new Error("下載位置不是資料夾。");
+  return real;
+}
+function createWindow() {
+  const win = new BrowserWindow({
+    width: 1120, height: 820, minWidth: 850, minHeight: 650, backgroundColor: "#0b1020",
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
+      webSecurity: true, allowRunningInsecureContent: false, devTools: !app.isPackaged
+    }
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  win.webContents.on("will-navigate", (event, targetUrl) => {
+    if (targetUrl !== win.webContents.getURL()) event.preventDefault();
+  });
+  win.webContents.on("will-attach-webview", event => event.preventDefault());
+  win.on("closed", () => approvedOutputDirs.delete(win.webContents.id));
+  win.loadFile(path.join(__dirname, "index.html"));
+}
+
+ipcMain.handle("check-tools", async event => {
+  assertTrustedSender(event);
+  const [version, ffmpeg] = await Promise.all([
+    getYtDlpVersion().catch(() => null),
+    runCommand("ffmpeg", ["-version"], 10000).then(() => true).catch(() => false)
+  ]);
+  return { ytDlp: !!version, ytDlpVersion: version, ytDlpSafe: !!version && isYtDlpVersionSafe(version), ffmpeg };
+});
+ipcMain.handle("choose-folder", async event => {
+  assertTrustedSender(event);
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) throw new Error("視窗不存在。");
+  const result = await dialog.showOpenDialog(win, { properties: ["openDirectory", "createDirectory"] });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const selected = await fs.realpath(result.filePaths[0]);
+  if (!(await fs.stat(selected)).isDirectory()) throw new Error("選取的路徑不是資料夾。");
+  approvedOutputDirs.set(event.sender.id, selected);
+  return selected;
+});
+ipcMain.handle("get-info", async (event, payload) => {
+  assertTrustedSender(event);
+  try {
+    if (!payload || typeof payload !== "object") throw new Error("請求格式錯誤。");
+    const url = validateUrl(payload.url);
+    const options = normalizeOptions(payload.options || {}, app.getPath("downloads"));
+    const args = ["--ignore-config", "--dump-single-json", "--no-warnings"];
+    if (!options.playlist) args.push("--no-playlist");
+    args.push("--", url);
+    const result = await runCommand("yt-dlp", args, INFO_TIMEOUT_MS);
+    const info = JSON.parse(result.stdout);
+    return {
+      ok: true, title: String(info.title || "").slice(0, 500),
+      uploader: String(info.uploader || "").slice(0, 300),
+      durationText: duration(info.duration),
+      formats: Array.isArray(info.formats) ? info.formats.length : 0
+    };
+  } catch (error) {
+    return { ok: false, error: String(error.stderr || error.stdout || error.message || "解析失敗").trim().slice(0, 2000) };
+  }
+});
+ipcMain.handle("cancel-download", event => {
+  assertTrustedSender(event);
+  const child = activeProcesses.get(event.sender.id);
+  if (!child) return false;
+  if (process.platform === "win32" && child.pid) {
+    execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+  } else if (child.pid) {
+    try { process.kill(-child.pid, "SIGTERM"); }
+    catch { try { child.kill("SIGTERM"); } catch {} }
+  } else child.kill("SIGTERM");
+  return true;
+});
+ipcMain.handle("start-download", async (event, job) => {
+  assertTrustedSender(event);
+  if (activeProcesses.size > 0) return { ok: false, error: "目前已有下載程序執行中，請等待完成或先取消。" };
+  let url, options, outputDir;
+  try {
+    if (!job || typeof job !== "object" || Array.isArray(job)) throw new Error("下載工作格式錯誤。");
+    url = validateUrl(job.url);
+    outputDir = await resolveOutputDir(event.sender.id, job.options?.outputPath);
+    options = normalizeOptions(job.options || {}, outputDir);
+    const version = await getYtDlpVersion();
+    if (!isYtDlpVersionSafe(version)) {
+      throw new Error("yt-dlp 版本過舊或無法辨識。請升級至 2026.07.04 或更新版本後再下載。");
+    }
+  } catch (error) { return { ok: false, error: error.message }; }
+
+  const args = buildArgs(options, url, outputDir, path.join(app.getPath("userData"), "download-archive.txt"));
+  sendTo(event.sender, "download-log", "\n開始下載：" + url + "\n（命令列參數由安全 GUI 設定產生；不接受自訂參數）\n");
+  return new Promise(resolve => {
+    const child = spawn("yt-dlp", args, {
+      windowsHide: true, detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    activeProcesses.set(event.sender.id, child);
+    let settled = false, buffer = "";
+    const finish = result => {
+      if (settled) return;
+      settled = true;
+      if (activeProcesses.get(event.sender.id) === child) activeProcesses.delete(event.sender.id);
+      resolve(result);
+    };
+    const onData = chunk => {
+      buffer += chunk.toString();
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        sendTo(event.sender, "download-log", line.slice(0, 4000));
+        if (/%/.test(line)) sendTo(event.sender, "download-progress", progress(line));
+      }
+    };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    child.on("error", error => {
+      sendTo(event.sender, "download-log", "程序啟動失敗：" + error.message);
+      sendTo(event.sender, "download-complete", { message: "下載啟動失敗" });
+      finish({ ok: false, error: error.message });
+    });
+    child.on("close", code => {
+      const ok = code === 0;
+      sendTo(event.sender, "download-complete", { message: ok ? "下載完成" : "下載失敗或已取消" });
+      finish({ ok, error: ok ? null : "exit code " + code });
+    });
+  });
+});
+
+app.whenReady().then(() => {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": ["default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'"]
+      }
+    });
+  });
+  createWindow();
+});
+app.on("before-quit", () => {
+  for (const child of activeProcesses.values()) {
+    if (!child.pid) continue;
+    if (process.platform === "win32") execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+    else { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
+  }
+});
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
