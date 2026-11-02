@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' file:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>yt-dlp EZ Downloader</title>
   <link rel="stylesheet" href="./css/index.css">
@@ -20,12 +20,12 @@
     <section class="card">
       <div class="section-title">
         <div><span class="step">01</span><h2>加入下載</h2></div>
-        <button id="clear-urls" class="button ghost small">清除</button>
+        <button id="clear-urls" class="button ghost small">清除輸入</button>
       </div>
       <label for="video-url">影片 / 播放清單網址</label>
       <div class="url-row">
         <textarea id="video-url" rows="3" placeholder="貼上 URL，可一次輸入多個網址，每行一個"></textarea>
-        <button id="inspect-btn" class="button secondary">解析資訊</button>
+        <button id="inspect-btn" class="button secondary">解析第一個網址</button>
       </div>
       <div id="media-info" class="media-info hidden"></div>
     </section>
@@ -110,6 +110,7 @@
         <div><span class="step">04</span><h2>下載佇列</h2></div>
         <div class="queue-actions">
           <button id="add-queue" class="button ghost">加入佇列</button>
+          <button id="clear-queue" class="button ghost">清空佇列</button>
           <button id="download-btn" class="button primary">開始下載</button>
           <button id="cancel-btn" class="button danger hidden">取消</button>
         </div>
@@ -120,6 +121,31 @@
         <div class="progress"><div id="progress-bar"></div></div>
         <div class="speed-line"><span id="speed">—</span><span id="eta">剩餘時間 —</span></div>
       </div>
+    </section>
+
+    <section class="card">
+      <div class="section-title"><div><span class="step">06</span><h2>影音播放</h2></div></div>
+      <div class="media-toolbar">
+        <button id="open-media" class="button secondary">開啟本機影音檔</button>
+        <span id="media-file-name" class="hint">尚未選擇檔案</span>
+      </div>
+      <video id="media-player" class="media-player hidden" controls preload="metadata"></video>
+      <audio id="audio-player" class="audio-player hidden" controls preload="metadata"></audio>
+    </section>
+    <section class="card">
+      <div class="section-title"><div><span class="step">07</span><h2>影音轉檔</h2></div></div>
+      <p class="hint">請先在「影音播放」選擇來源檔案，再選擇輸出格式。轉檔需要安裝 FFmpeg；已存在的輸出檔不會被覆蓋，請另選檔名。</p>
+      <div class="conversion-toolbar">
+        <label for="conversion-format">輸出格式</label>
+        <select id="conversion-format">
+          <optgroup label="影片"><option value="mp4">MP4（H.264 / AAC）</option><option value="mkv">MKV（H.264 / AAC）</option><option value="webm">WebM（VP9 / Opus）</option></optgroup>
+          <optgroup label="音訊"><option value="mp3">MP3</option><option value="m4a">M4A（AAC）</option><option value="wav">WAV</option><option value="flac">FLAC</option><option value="opus">Opus</option></optgroup>
+        </select>
+        <button id="convert-btn" class="button primary" disabled>開始轉檔</button>
+        <button id="cancel-conversion-btn" class="button danger hidden">取消轉檔</button>
+      </div>
+      <div id="conversion-status" class="hint">等待轉檔</div>
+      <pre id="conversion-log" class="conversion-log"></pre>
     </section>
     <section class="card log-card">
       <div class="section-title"><div><span class="step">05</span><h2>執行日誌</h2></div><button id="clear-log" class="button ghost small">清除</button></div>

@@ -13,4 +13,5 @@ jobs:
         with:
           node-version: 24
       - run: npm install
+      - run: node --check main.js && node --check preload.js && node --check js/renderer.js
       - run: npm test

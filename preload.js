@@ -10,6 +10,11 @@ function subscribe(channel, callback) {
 contextBridge.exposeInMainWorld("ytDlp", Object.freeze({
   getInfo: (url, options = {}) => ipcRenderer.invoke("get-info", { url, options }),
   chooseFolder: () => ipcRenderer.invoke("choose-folder"),
+  chooseMediaFile: () => ipcRenderer.invoke("choose-media-file"),
+  convertMedia: format => ipcRenderer.invoke("convert-media", format),
+  cancelConversion: () => ipcRenderer.invoke("cancel-conversion"),
+  onConversionProgress: callback => subscribe("conversion-progress", callback),
+  onConversionLog: callback => subscribe("conversion-log", callback),
   startDownload: job => ipcRenderer.invoke("start-download", job),
   cancelDownload: () => ipcRenderer.invoke("cancel-download"),
   checkTools: () => ipcRenderer.invoke("check-tools"),

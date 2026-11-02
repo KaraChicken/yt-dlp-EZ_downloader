@@ -28,7 +28,12 @@ function renderQueue() {
     '</span><span class="queue-url" title="' + esc(item.url) + '">' +
     esc(item.url) + '</span><span class="queue-status">' +
     (index === state.current ? "下載中" : item.status) +
-    "</span></div>"
+    '</span><button class="button ghost small queue-move" data-move="up" data-index="' + index + '" ' +
+    (state.running || index === 0 ? "disabled" : "") + '>上移</button>' +
+    '<button class="button ghost small queue-move" data-move="down" data-index="' + index + '" ' +
+    (state.running || index === state.queue.length - 1 ? "disabled" : "") + '>下移</button>' +
+    '<button class="button ghost small queue-remove" data-remove="' + index + '" ' +
+    (state.running ? "disabled" : "") + '>移除</button></div>'
   ).join("");
 }
 function opts() {
@@ -61,6 +66,34 @@ $("advanced-toggle").addEventListener("click", () => $("advanced-panel").classLi
 $("clear-urls").addEventListener("click", () => {
   $("video-url").value = "";
   $("media-info").classList.add("hidden");
+});
+$("clear-queue").addEventListener("click", () => {
+  if (state.running) return;
+  state.queue = [];
+  state.current = -1;
+  renderQueue();
+  log("已清空下載佇列");
+});
+$("queue").addEventListener("click", event => {
+  if (state.running) return;
+  const move = event.target.closest("[data-move]");
+  if (move) {
+    const from = Number(move.dataset.index);
+    const to = from + (move.dataset.move === "up" ? -1 : 1);
+    if (Number.isInteger(from) && to >= 0 && to < state.queue.length) {
+      const [item] = state.queue.splice(from, 1);
+      state.queue.splice(to, 0, item);
+      renderQueue();
+    }
+    return;
+  }
+  const button = event.target.closest("[data-remove]");
+  if (!button) return;
+  const index = Number(button.dataset.remove);
+  if (Number.isInteger(index) && index >= 0 && index < state.queue.length) {
+    state.queue.splice(index, 1);
+    renderQueue();
+  }
 });
 $("clear-log").addEventListener("click", () => { $("log").textContent = ""; });
 $("folder-btn").addEventListener("click", async () => {
@@ -107,6 +140,10 @@ async function start() {
     if (!state.queue.length) return;
   }
   state.running = true;
+  const runOptions = Object.freeze(opts());
+  document.querySelectorAll("main input, main select, main textarea, #add-queue, #clear-queue, #inspect-btn, #folder-btn, #advanced-toggle").forEach(control => {
+    if (control.id !== "video-url") control.disabled = true;
+  });
   $("download-btn").classList.add("hidden");
   $("cancel-btn").classList.remove("hidden");
   $("progress-wrap").classList.remove("hidden");
@@ -122,7 +159,7 @@ async function start() {
     try {
       const result = await window.ytDlp.startDownload({
         url: state.queue[index].url,
-        options: opts()
+        options: runOptions
       });
       state.queue[index].status = result.ok ? "完成" : "失敗";
       if (!result.ok) log(result.error || "下載失敗");
@@ -134,6 +171,7 @@ async function start() {
   }
   state.current = -1;
   state.running = false;
+  document.querySelectorAll("main input, main select, main textarea, #add-queue, #clear-queue, #inspect-btn, #folder-btn, #advanced-toggle").forEach(control => { control.disabled = false; });
   $("download-btn").classList.remove("hidden");
   $("cancel-btn").classList.add("hidden");
   renderQueue();
@@ -141,8 +179,8 @@ async function start() {
 $("download-btn").addEventListener("click", start);
 $("cancel-btn").addEventListener("click", async () => {
   state.running = false;
-  await window.ytDlp.cancelDownload();
-  log("已要求取消目前下載");
+  const accepted = await window.ytDlp.cancelDownload();
+  log(accepted ? "已送出取消要求（包含前置檢查階段）" : "目前沒有可取消的下載工作");
 });
 state.unsubscribers.push(
   window.ytDlp.onProgress(data => {
@@ -155,6 +193,69 @@ state.unsubscribers.push(
   window.ytDlp.onLog(log),
   window.ytDlp.onComplete(data => log(data.message || data))
 );
+
+let mediaLoaded = false;
+let conversionRunning = false;
+let conversionDuration = 0;
+const mediaElements = [$("media-player"), $("audio-player")];
+$("open-media").addEventListener("click", async () => {
+  try {
+    const selected = await window.ytDlp.chooseMediaFile();
+    if (!selected) return;
+    mediaElements.forEach(player => { player.pause(); player.removeAttribute("src"); player.load(); player.classList.add("hidden"); });
+    const isAudio = /\.(mp3|m4a|aac|wav|flac|ogg|opus)$/i.test(selected.name);
+    const player = isAudio ? $("audio-player") : $("media-player");
+    player.src = selected.url;
+    player.classList.remove("hidden");
+    $("media-file-name").textContent = selected.name;
+    mediaLoaded = true;
+    $("conversion-status").textContent = "已選擇來源檔案：" + selected.name;
+  } catch (error) { log(error.message); }
+});
+$("convert-btn").addEventListener("click", async () => {
+  if (!mediaLoaded || conversionRunning) {
+    $("conversion-status").textContent = mediaLoaded ? "轉檔工作正在執行。" : "請先開啟本機影音檔案。";
+    return;
+  }
+  conversionRunning = true;
+  $("convert-btn").disabled = true;
+  $("conversion-format").disabled = true;
+  $("cancel-conversion-btn").classList.remove("hidden");
+  $("conversion-status").textContent = "正在準備轉檔與選擇輸出位置…";
+  $("conversion-log").textContent = "";
+  conversionDuration = 0;
+  try {
+    const result = await window.ytDlp.convertMedia($("conversion-format").value);
+    if (result.cancelled) $("conversion-status").textContent = "已取消轉檔。";
+    else if (result.ok) $("conversion-status").textContent = "轉檔完成：" + result.output;
+    else $("conversion-status").textContent = "轉檔失敗：" + (result.error || "請確認 FFmpeg 與輸出格式支援。");
+  } catch (error) { $("conversion-status").textContent = "轉檔失敗：" + error.message; }
+  finally {
+    conversionRunning = false;
+    $("convert-btn").disabled = false;
+    $("conversion-format").disabled = false;
+    $("cancel-conversion-btn").classList.add("hidden");
+  }
+});
+$("cancel-conversion-btn").addEventListener("click", async () => {
+  const accepted = await window.ytDlp.cancelConversion();
+  $("conversion-status").textContent = accepted ? "已送出取消要求…" : "目前沒有可取消的轉檔。";
+});
+state.unsubscribers.push(
+  window.ytDlp.onConversionProgress(data => {
+    if (Number.isFinite(data.duration) && data.duration > 0) conversionDuration = data.duration;
+    if (data.done) $("conversion-status").textContent = "轉檔即將完成（100%）…";
+    else if (Number.isFinite(data.seconds)) {
+      const percent = conversionDuration > 0 ? Math.min(100, data.seconds / conversionDuration * 100) : 0;
+      $("conversion-status").textContent = "轉檔中 " + (percent > 0 ? percent.toFixed(1) + "% · " : "") + Math.floor(data.seconds) + " 秒";
+    }
+  }),
+  window.ytDlp.onConversionLog(data => {
+    $("conversion-log").textContent = ($("conversion-log").textContent + data).slice(-12000);
+    $("conversion-log").scrollTop = $("conversion-log").scrollHeight;
+  })
+);
+
 window.addEventListener("beforeunload", () => state.unsubscribers.forEach(unsubscribe => unsubscribe()));
 (async () => {
   try {
@@ -168,7 +269,16 @@ window.addEventListener("beforeunload", () => state.unsubscribers.forEach(unsubs
     } else {
       $("tool-status").textContent = "yt-dlp " + result.ytDlpVersion;
     }
-    if (!result.ffmpeg) log("提示：找不到 FFmpeg；合併影音或音訊轉檔可能失敗。");
+    if (!result.ffmpeg) {
+      log("提示：找不到 FFmpeg；合併影音、音訊抽取及本機轉檔無法使用。");
+      $("convert-btn").disabled = true;
+      $("conversion-status").textContent = "未偵測到 FFmpeg，請安裝後重新啟動程式。";
+    } else {
+      $("convert-btn").disabled = false;
+    }
+    if (!result.ffprobe) log("提示：找不到 FFprobe；部分媒體資訊與後處理功能可能受影響。");
+    if (!result.jsRuntime) log("提示：未偵測到 Deno 或 Node.js；YouTube 部分格式可能需要 JavaScript runtime。");
+    $("output-path").value = result.defaultOutputPath || "";
   } catch (error) { log(error.message); }
 })();
 renderQueue();

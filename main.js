@@ -2,10 +2,13 @@ const { app, BrowserWindow, ipcMain, dialog, session } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { fileURLToPath } = require("node:url");
+const { fileURLToPath, pathToFileURL } = require("node:url");
 const { validateUrl, normalizeOptions, isYtDlpVersionSafe, buildArgs } = require("./security");
 
-const activeProcesses = new Map();
+const activeJobs = new Map();
+const selectedMediaFiles = new Map();
+const conversionJobs = new Map();
+let activeJobId = null;
 const approvedOutputDirs = new Map();
 const INFO_TIMEOUT_MS = 45000;
 
@@ -72,9 +75,120 @@ function createWindow() {
     if (targetUrl !== win.webContents.getURL()) event.preventDefault();
   });
   win.webContents.on("will-attach-webview", event => event.preventDefault());
-  win.on("closed", () => approvedOutputDirs.delete(win.webContents.id));
+  win.on("closed", () => { approvedOutputDirs.delete(win.webContents.id); selectedMediaFiles.delete(win.webContents.id); });
   win.loadFile(path.join(__dirname, "index.html"));
 }
+
+
+const MEDIA_FILTERS = [
+  { name: "影音檔案", extensions: ["mp4","mkv","mov","webm","avi","m4v","mp3","m4a","aac","wav","flac","ogg","opus"] },
+  { name: "所有檔案", extensions: ["*"] }
+];
+const CONVERSION_FORMATS = Object.freeze({
+  mp4: ["-c:v","libx264","-preset","medium","-crf","23","-c:a","aac","-b:a","192k","-movflags","+faststart"],
+  mkv: ["-c:v","libx264","-preset","medium","-crf","23","-c:a","aac","-b:a","192k"],
+  webm: ["-c:v","libvpx-vp9","-crf","32","-b:v","0","-c:a","libopus","-b:a","128k"],
+  mp3: ["-vn","-c:a","libmp3lame","-q:a","2"],
+  m4a: ["-vn","-c:a","aac","-b:a","192k"],
+  wav: ["-vn","-c:a","pcm_s16le"],
+  flac: ["-vn","-c:a","flac"],
+  opus: ["-vn","-c:a","libopus","-b:a","128k"]
+});
+ipcMain.handle("choose-media-file", async event => {
+  assertTrustedSender(event);
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) throw new Error("視窗不存在。");
+  const result = await dialog.showOpenDialog(win, { properties: ["openFile"], filters: MEDIA_FILTERS });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const selected = await fs.realpath(result.filePaths[0]);
+  const stat = await fs.stat(selected);
+  if (!stat.isFile()) throw new Error("選取的來源不是檔案。");
+  selectedMediaFiles.set(event.sender.id, selected);
+  return { name: path.basename(selected), url: pathToFileURL(selected).href };
+});
+ipcMain.handle("convert-media", async (event, format) => {
+  assertTrustedSender(event);
+  if (conversionJobs.has(event.sender.id)) throw new Error("目前已有轉檔工作執行中。");
+  const input = selectedMediaFiles.get(event.sender.id);
+  if (!input) throw new Error("請先選擇要轉檔的影音檔案。");
+  if (!Object.hasOwn(CONVERSION_FORMATS, format)) throw new Error("不支援的轉檔格式。");
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) throw new Error("視窗不存在。");
+  const control = { child: null, cancelRequested: false };
+  conversionJobs.set(event.sender.id, control);
+  try {
+    const result = await dialog.showSaveDialog(win, {
+      defaultPath: path.join(path.dirname(input), path.basename(input, path.extname(input)) + "." + format),
+      filters: [{ name: format.toUpperCase(), extensions: [format] }],
+    });
+    if (result.canceled || !result.filePath || control.cancelRequested) return { ok: false, cancelled: true };
+    const output = path.resolve(result.filePath);
+    if (path.extname(output).toLowerCase() !== "." + format) throw new Error("輸出副檔名必須是 ." + format + "。");
+    const realInput = await fs.realpath(input);
+    const realOutput = await fs.realpath(output).catch(() => path.resolve(output));
+    const sameResolvedPath = process.platform === "win32"
+      ? realInput.toLowerCase() === realOutput.toLowerCase()
+      : realInput === realOutput;
+    const [inputStat, outputStat] = await Promise.all([
+      fs.stat(input),
+      fs.stat(output).catch(() => null)
+    ]);
+    if (sameResolvedPath || (outputStat && inputStat.dev === outputStat.dev && inputStat.ino === outputStat.ino)) {
+      throw new Error("輸出檔不能覆蓋來源檔或其硬連結。");
+    }
+    await fs.access(input);
+    if (control.cancelRequested) return { ok: false, cancelled: true };
+    const durationResult = await runCommand("ffprobe", ["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1",input], 15000).catch(() => null);
+    const durationSeconds = durationResult ? Number(durationResult.stdout.trim()) : 0;
+    sendTo(event.sender, "conversion-progress", { duration: Number.isFinite(durationSeconds) ? durationSeconds : 0 });
+    if (control.cancelRequested) return { ok: false, cancelled: true };
+    return await new Promise(resolve => {
+      const args = ["-hide_banner","-nostdin","-n","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
+      const child = spawn("ffmpeg", args, { windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore","pipe","pipe"] });
+      control.child = child;
+      let outputBuffer = "", errorBuffer = "", settled = false;
+      const finish = value => { if (settled) return; settled = true; resolve(value); };
+      child.stdout.on("data", chunk => {
+        outputBuffer += chunk.toString();
+        const lines = outputBuffer.split(/\r?\n/); outputBuffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("out_time_ms=")) {
+            const micros = Number(line.slice(12));
+            if (Number.isFinite(micros)) sendTo(event.sender, "conversion-progress", { seconds: micros / 1000000 });
+          } else if (line === "progress=end") sendTo(event.sender, "conversion-progress", { done: true, percent: 100 });
+        }
+      });
+      child.stderr.on("data", chunk => {
+        errorBuffer = (errorBuffer + chunk.toString()).slice(-8000);
+        sendTo(event.sender, "conversion-log", chunk.toString().slice(-2000));
+      });
+      child.on("error", error => finish({ ok: false, error: error.message }));
+      child.on("close", code => finish({
+        ok: code === 0 && !control.cancelRequested,
+        cancelled: control.cancelRequested,
+        error: code === 0 ? null : errorBuffer.slice(-2000),
+        output: code === 0 && !control.cancelRequested ? output : null
+      }));
+      if (control.cancelRequested && child.pid) {
+        if (process.platform === "win32") execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+        else { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
+      }
+    });
+  } finally {
+    if (conversionJobs.get(event.sender.id) === control) conversionJobs.delete(event.sender.id);
+  }
+});
+ipcMain.handle("cancel-conversion", event => {
+  assertTrustedSender(event);
+  const job = conversionJobs.get(event.sender.id);
+  if (!job) return false;
+  job.cancelRequested = true;
+  if (job.child?.pid) {
+    if (process.platform === "win32") execFile("taskkill", ["/pid", String(job.child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+    else { try { process.kill(-job.child.pid, "SIGTERM"); } catch { job.child.kill("SIGTERM"); } }
+  }
+  return true;
+});
 
 ipcMain.handle("check-tools", async event => {
   assertTrustedSender(event);
@@ -82,7 +196,16 @@ ipcMain.handle("check-tools", async event => {
     getYtDlpVersion().catch(() => null),
     runCommand("ffmpeg", ["-version"], 10000).then(() => true).catch(() => false)
   ]);
-  return { ytDlp: !!version, ytDlpVersion: version, ytDlpSafe: !!version && isYtDlpVersionSafe(version), ffmpeg };
+  const [ffprobe, deno, nodeRuntime] = await Promise.all([
+    runCommand("ffprobe", ["-version"], 10000).then(() => true).catch(() => false),
+    runCommand("deno", ["--version"], 10000).then(() => true).catch(() => false),
+    runCommand("node", ["--version"], 10000).then(() => true).catch(() => false)
+  ]);
+  return {
+    ytDlp: !!version, ytDlpVersion: version, ytDlpSafe: !!version && isYtDlpVersionSafe(version),
+    ffmpeg, ffprobe, jsRuntime: deno ? "deno" : nodeRuntime ? "node" : null,
+    defaultOutputPath: app.getPath("downloads")
+  };
 });
 ipcMain.handle("choose-folder", async event => {
   assertTrustedSender(event);
@@ -118,85 +241,111 @@ ipcMain.handle("get-info", async (event, payload) => {
 });
 ipcMain.handle("cancel-download", event => {
   assertTrustedSender(event);
-  const child = activeProcesses.get(event.sender.id);
-  if (!child) return false;
-  if (process.platform === "win32" && child.pid) {
-    execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
-  } else if (child.pid) {
-    try { process.kill(-child.pid, "SIGTERM"); }
-    catch { try { child.kill("SIGTERM"); } catch {} }
-  } else child.kill("SIGTERM");
+  const job = activeJobs.get(event.sender.id);
+  if (!job) return false;
+  job.cancelRequested = true;
+  if (job.child?.pid) {
+    if (process.platform === "win32") {
+      execFile("taskkill", ["/pid", String(job.child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+    } else {
+      try { process.kill(-job.child.pid, "SIGTERM"); }
+      catch { try { job.child.kill("SIGTERM"); } catch {} }
+    }
+  }
   return true;
 });
 ipcMain.handle("start-download", async (event, job) => {
   assertTrustedSender(event);
-  if (activeProcesses.size > 0) return { ok: false, error: "目前已有下載程序執行中，請等待完成或先取消。" };
-  let url, options, outputDir;
+  // Reserve the single global slot synchronously, before the first await.
+  if (activeJobId !== null) return { ok: false, error: "目前已有下載工作執行中，請等待完成或先取消。" };
+  const jobId = event.sender.id;
+  const control = { cancelRequested: false, child: null };
+  activeJobId = jobId;
+  activeJobs.set(jobId, control);
+  const isCancelled = () => control.cancelRequested || event.sender.isDestroyed();
   try {
     if (!job || typeof job !== "object" || Array.isArray(job)) throw new Error("下載工作格式錯誤。");
-    url = validateUrl(job.url);
-    outputDir = await resolveOutputDir(event.sender.id, job.options?.outputPath);
-    options = normalizeOptions(job.options || {}, outputDir);
+    const url = validateUrl(job.url);
+    const outputDir = await resolveOutputDir(jobId, job.options?.outputPath);
+    if (isCancelled()) return { ok: false, cancelled: true, error: "下載已取消。" };
+    const options = normalizeOptions(job.options || {}, outputDir);
     const version = await getYtDlpVersion();
-    if (!isYtDlpVersionSafe(version)) {
-      throw new Error("yt-dlp 版本過舊或無法辨識。請升級至 2026.07.04 或更新版本後再下載。");
-    }
-  } catch (error) { return { ok: false, error: error.message }; }
-
-  const args = buildArgs(options, url, outputDir, path.join(app.getPath("userData"), "download-archive.txt"));
-  sendTo(event.sender, "download-log", "\n開始下載：" + url + "\n（命令列參數由安全 GUI 設定產生；不接受自訂參數）\n");
-  return new Promise(resolve => {
-    const child = spawn("yt-dlp", args, {
-      windowsHide: true, detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    activeProcesses.set(event.sender.id, child);
-    let settled = false, buffer = "";
-    const finish = result => {
-      if (settled) return;
-      settled = true;
-      if (activeProcesses.get(event.sender.id) === child) activeProcesses.delete(event.sender.id);
-      resolve(result);
-    };
-    const onData = chunk => {
-      buffer += chunk.toString();
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        sendTo(event.sender, "download-log", line.slice(0, 4000));
-        if (/%/.test(line)) sendTo(event.sender, "download-progress", progress(line));
+    if (isCancelled()) return { ok: false, cancelled: true, error: "下載已取消。" };
+    if (!isYtDlpVersionSafe(version)) throw new Error("yt-dlp 版本過舊或無法辨識。請升級至 2026.07.04 或更新版本後再下載。");
+    const args = buildArgs(options, url, outputDir, path.join(app.getPath("userData"), "download-archive.txt"));
+    if (isCancelled()) return { ok: false, cancelled: true, error: "下載已取消。" };
+    sendTo(event.sender, "download-log", "\n開始下載：" + url + "\n（命令列參數由安全 GUI 設定產生；不接受自訂參數）\n");
+    return await new Promise(resolve => {
+      const child = spawn("yt-dlp", args, {
+        windowsHide: true, detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      control.child = child;
+      let settled = false, buffer = "";
+      const finish = result => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      const onData = chunk => {
+        buffer += chunk.toString();
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          sendTo(event.sender, "download-log", line.slice(0, 4000));
+          if (/%/.test(line)) sendTo(event.sender, "download-progress", progress(line));
+        }
+      };
+      child.stdout.on("data", onData);
+      child.stderr.on("data", onData);
+      child.on("error", error => {
+        sendTo(event.sender, "download-log", "程序啟動失敗：" + error.message);
+        sendTo(event.sender, "download-complete", { message: "下載啟動失敗" });
+        finish({ ok: false, error: error.message });
+      });
+      child.on("close", code => {
+        const ok = code === 0 && !control.cancelRequested;
+        sendTo(event.sender, "download-complete", { message: ok ? "下載完成" : control.cancelRequested ? "已取消下載" : "下載失敗" });
+        finish({ ok, cancelled: control.cancelRequested, error: ok ? null : "exit code " + code });
+      });
+      if (control.cancelRequested) {
+        if (child.pid && process.platform !== "win32") { try { process.kill(-child.pid, "SIGTERM"); } catch {} }
+        else if (child.pid) execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
       }
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.on("error", error => {
-      sendTo(event.sender, "download-log", "程序啟動失敗：" + error.message);
-      sendTo(event.sender, "download-complete", { message: "下載啟動失敗" });
-      finish({ ok: false, error: error.message });
     });
-    child.on("close", code => {
-      const ok = code === 0;
-      sendTo(event.sender, "download-complete", { message: ok ? "下載完成" : "下載失敗或已取消" });
-      finish({ ok, error: ok ? null : "exit code " + code });
-    });
-  });
+  } catch (error) {
+    return { ok: false, cancelled: isCancelled(), error: error.message };
+  } finally {
+    if (activeJobs.get(jobId) === control) activeJobs.delete(jobId);
+    if (activeJobId === jobId) activeJobId = null;
+  }
 });
+
 
 app.whenReady().then(() => {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        "Content-Security-Policy": ["default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'"]
+        "Content-Security-Policy": ["default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' file:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'"]
       }
     });
   });
   createWindow();
 });
 app.on("before-quit", () => {
-  for (const child of activeProcesses.values()) {
-    if (!child.pid) continue;
+  for (const job of conversionJobs.values()) {
+    job.cancelRequested = true;
+    if (job.child?.pid) {
+      if (process.platform === "win32") execFile("taskkill", ["/pid", String(job.child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+      else { try { process.kill(-job.child.pid, "SIGTERM"); } catch { job.child.kill("SIGTERM"); } }
+    }
+  }
+  for (const job of activeJobs.values()) {
+    job.cancelRequested = true;
+    const child = job.child;
+    if (!child?.pid) continue;
     if (process.platform === "win32") execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
     else { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
   }
