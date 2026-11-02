@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>yt-dlp EZ Downloader</title>
   <link rel="stylesheet" href="./css/index.css">
@@ -16,7 +16,6 @@
     </div>
     <div id="tool-status" class="status-pill">檢查環境中…</div>
   </header>
-
   <main class="layout">
     <section class="card">
       <div class="section-title">
@@ -30,17 +29,14 @@
       </div>
       <div id="media-info" class="media-info hidden"></div>
     </section>
-
     <section class="grid">
       <div class="card">
         <div class="section-title"><div><span class="step">02</span><h2>格式與品質</h2></div></div>
         <label for="mode">下載模式</label>
         <select id="mode">
-          <option value="video">影片（自動最佳畫質）</option>
+          <option value="video">影片</option>
           <option value="audio">純音訊</option>
-          <option value="custom">自訂格式</option>
         </select>
-
         <div id="video-options" class="options">
           <label for="resolution">最高影片解析度</label>
           <select id="resolution">
@@ -59,7 +55,6 @@
             <option value="webm">WebM</option>
           </select>
         </div>
-
         <div id="audio-options" class="options hidden">
           <label for="audio-format">音訊格式</label>
           <select id="audio-format">
@@ -77,14 +72,7 @@
             <option value="7">較省空間</option>
           </select>
         </div>
-
-        <div id="custom-options" class="options hidden">
-          <label for="format-code">yt-dlp format selector</label>
-          <input id="format-code" value="bv*+ba/b" placeholder="例如：bv*[height<=1080]+ba/b">
-          <p class="hint">直接使用 yt-dlp 的 <code>-f</code> 格式選擇語法。</p>
-        </div>
       </div>
-
       <div class="card">
         <div class="section-title"><div><span class="step">03</span><h2>輸出與選項</h2></div></div>
         <label for="output-path">下載位置</label>
@@ -92,7 +80,6 @@
           <input id="output-path" value="" readonly>
           <button id="folder-btn" class="button ghost">選擇</button>
         </div>
-
         <div class="checks">
           <label class="check"><input type="checkbox" id="playlist"> 允許下載播放清單</label>
           <label class="check"><input type="checkbox" id="subtitles"> 下載字幕</label>
@@ -103,23 +90,21 @@
         </div>
       </div>
     </section>
-
     <section class="card advanced">
       <button id="advanced-toggle" class="advanced-toggle">進階設定 <span>⌄</span></button>
       <div id="advanced-panel" class="advanced-panel hidden">
         <div class="grid three">
-          <div><label for="proxy">Proxy</label><input id="proxy" placeholder="http://127.0.0.1:7890"></div>
+          <div><label for="proxy">Proxy（HTTP / HTTPS / SOCKS5）</label><input id="proxy" placeholder="http://127.0.0.1:7890"></div>
           <div><label for="rate-limit">速度上限</label><input id="rate-limit" placeholder="例如 5M、500K"></div>
-          <div><label for="fragments">並行 fragments</label><input id="fragments" type="number" min="1" max="32" value="4"></div>
+          <div><label for="fragments">並行 fragments（1–16）</label><input id="fragments" type="number" min="1" max="16" value="4"></div>
         </div>
         <div class="grid three">
-          <div><label for="retries">重試次數</label><input id="retries" type="number" min="0" value="10"></div>
+          <div><label for="retries">重試次數（0–10）</label><input id="retries" type="number" min="0" max="10" value="10"></div>
           <div><label for="cookies">Cookies</label><select id="cookies"><option value="">不使用</option><option value="chrome">Chrome</option><option value="edge">Edge</option><option value="firefox">Firefox</option><option value="brave">Brave</option></select></div>
-          <div><label for="extra-args">額外 yt-dlp 參數</label><input id="extra-args" placeholder="例如 --write-info-json"></div>
         </div>
+        <p class="hint">所有進階選項均由 GUI 驗證；不支援自訂命令列參數或任意 yt-dlp 指令。</p>
       </div>
     </section>
-
     <section class="card queue-card">
       <div class="section-title">
         <div><span class="step">04</span><h2>下載佇列</h2></div>
@@ -136,7 +121,6 @@
         <div class="speed-line"><span id="speed">—</span><span id="eta">剩餘時間 —</span></div>
       </div>
     </section>
-
     <section class="card log-card">
       <div class="section-title"><div><span class="step">05</span><h2>執行日誌</h2></div><button id="clear-log" class="button ghost small">清除</button></div>
       <pre id="log"></pre>
