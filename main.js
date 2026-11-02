@@ -2,10 +2,12 @@ const { app, BrowserWindow, ipcMain, dialog, session } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { fileURLToPath } = require("node:url");
+const { fileURLToPath, pathToFileURL } = require("node:url");
 const { validateUrl, normalizeOptions, isYtDlpVersionSafe, buildArgs } = require("./security");
 
 const activeJobs = new Map();
+const selectedMediaFiles = new Map();
+const conversionJobs = new Map();
 let activeJobId = null;
 const approvedOutputDirs = new Map();
 const INFO_TIMEOUT_MS = 45000;
@@ -76,6 +78,96 @@ function createWindow() {
   win.on("closed", () => approvedOutputDirs.delete(win.webContents.id));
   win.loadFile(path.join(__dirname, "index.html"));
 }
+
+
+const MEDIA_FILTERS = [
+  { name: "影音檔案", extensions: ["mp4","mkv","mov","webm","avi","m4v","mp3","m4a","aac","wav","flac","ogg","opus"] },
+  { name: "所有檔案", extensions: ["*"] }
+];
+const CONVERSION_FORMATS = Object.freeze({
+  mp4: ["-c:v","libx264","-preset","medium","-crf","23","-c:a","aac","-b:a","192k","-movflags","+faststart"],
+  mkv: ["-c:v","libx264","-preset","medium","-crf","23","-c:a","aac","-b:a","192k"],
+  webm: ["-c:v","libvpx-vp9","-crf","32","-b:v","0","-c:a","libopus","-b:a","128k"],
+  mp3: ["-vn","-c:a","libmp3lame","-q:a","2"],
+  m4a: ["-vn","-c:a","aac","-b:a","192k"],
+  wav: ["-vn","-c:a","pcm_s16le"],
+  flac: ["-vn","-c:a","flac"],
+  opus: ["-vn","-c:a","libopus","-b:a","128k"]
+});
+ipcMain.handle("choose-media-file", async event => {
+  assertTrustedSender(event);
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) throw new Error("視窗不存在。");
+  const result = await dialog.showOpenDialog(win, { properties: ["openFile"], filters: MEDIA_FILTERS });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const selected = await fs.realpath(result.filePaths[0]);
+  const stat = await fs.stat(selected);
+  if (!stat.isFile()) throw new Error("選取的來源不是檔案。");
+  selectedMediaFiles.set(event.sender.id, selected);
+  return { name: path.basename(selected), url: pathToFileURL(selected).href };
+});
+ipcMain.handle("convert-media", async (event, format) => {
+  assertTrustedSender(event);
+  if (conversionJobs.has(event.sender.id)) throw new Error("目前已有轉檔工作執行中。");
+  const input = selectedMediaFiles.get(event.sender.id);
+  if (!input) throw new Error("請先選擇要轉檔的影音檔案。");
+  if (!Object.hasOwn(CONVERSION_FORMATS, format)) throw new Error("不支援的轉檔格式。");
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const result = await dialog.showSaveDialog(win, {
+    defaultPath: path.join(path.dirname(input), path.basename(input, path.extname(input)) + "." + format),
+    filters: [{ name: format.toUpperCase(), extensions: [format] }]
+  });
+  if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+  const output = path.resolve(result.filePath);
+  if (output === input) throw new Error("輸出檔不能覆蓋來源檔。");
+  const control = { child: null, cancelRequested: false };
+  conversionJobs.set(event.sender.id, control);
+  try {
+    await fs.access(input);
+    return await new Promise(resolve => {
+      const args = ["-hide_banner","-nostdin","-y","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
+      const child = spawn("ffmpeg", args, { windowsHide: true, stdio: ["ignore","pipe","pipe"] });
+      control.child = child;
+      let outputBuffer = "", errorBuffer = "", settled = false;
+      const finish = value => { if (settled) return; settled = true; resolve(value); };
+      child.stdout.on("data", chunk => {
+        outputBuffer += chunk.toString();
+        const lines = outputBuffer.split(/\r?\n/); outputBuffer = lines.pop() || "";
+        for (const line of lines) {
+          if (line.startsWith("out_time_ms=")) {
+            const micros = Number(line.slice(12));
+            if (Number.isFinite(micros)) sendTo(event.sender, "conversion-progress", { seconds: micros / 1000000 });
+          } else if (line === "progress=end") sendTo(event.sender, "conversion-progress", { done: true, percent: 100 });
+        }
+      });
+      child.stderr.on("data", chunk => {
+        errorBuffer = (errorBuffer + chunk.toString()).slice(-8000);
+        sendTo(event.sender, "conversion-log", chunk.toString().slice(-2000));
+      });
+      child.on("error", error => finish({ ok: false, error: error.message }));
+      child.on("close", code => finish({
+        ok: code === 0 && !control.cancelRequested,
+        cancelled: control.cancelRequested,
+        error: code === 0 ? null : errorBuffer.slice(-2000),
+        output: code === 0 && !control.cancelRequested ? output : null
+      }));
+      if (control.cancelRequested && child.pid) child.kill("SIGTERM");
+    });
+  } finally {
+    conversionJobs.delete(event.sender.id);
+  }
+});
+ipcMain.handle("cancel-conversion", event => {
+  assertTrustedSender(event);
+  const job = conversionJobs.get(event.sender.id);
+  if (!job) return false;
+  job.cancelRequested = true;
+  if (job.child?.pid) {
+    if (process.platform === "win32") execFile("taskkill", ["/pid", String(job.child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+    else { try { process.kill(-job.child.pid, "SIGTERM"); } catch { job.child.kill("SIGTERM"); } }
+  }
+  return true;
+});
 
 ipcMain.handle("check-tools", async event => {
   assertTrustedSender(event);
