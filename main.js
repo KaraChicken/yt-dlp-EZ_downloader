@@ -161,7 +161,7 @@ ipcMain.handle("start-download", async (event, job) => {
     if (!isYtDlpVersionSafe(version)) throw new Error("yt-dlp 版本過舊或無法辨識。請升級至 2026.07.04 或更新版本後再下載。");
     const args = buildArgs(options, url, outputDir, path.join(app.getPath("userData"), "download-archive.txt"));
     if (isCancelled()) return { ok: false, cancelled: true, error: "下載已取消。" };
-    sendTo(event.sender, "download-log", "\\n開始下載：" + url + "\\n（命令列參數由安全 GUI 設定產生；不接受自訂參數）\\n");
+    sendTo(event.sender, "download-log", "\n開始下載：" + url + "\n（命令列參數由安全 GUI 設定產生；不接受自訂參數）\n");
     return await new Promise(resolve => {
       const child = spawn("yt-dlp", args, {
         windowsHide: true, detached: process.platform !== "win32",
@@ -176,7 +176,7 @@ ipcMain.handle("start-download", async (event, job) => {
       };
       const onData = chunk => {
         buffer += chunk.toString();
-        const lines = buffer.split(/\\r?\\n/);
+        const lines = buffer.split(/\r?\n/);
         buffer = lines.pop() || "";
         for (const line of lines) {
           if (!line.trim()) continue;
