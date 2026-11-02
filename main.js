@@ -124,8 +124,19 @@ ipcMain.handle("convert-media", async (event, format) => {
     });
     if (result.canceled || !result.filePath || control.cancelRequested) return { ok: false, cancelled: true };
     const output = path.resolve(result.filePath);
-    if (output === input) throw new Error("輸出檔不能覆蓋來源檔。");
     if (path.extname(output).toLowerCase() !== "." + format) throw new Error("輸出副檔名必須是 ." + format + "。");
+    const realInput = await fs.realpath(input);
+    const realOutput = await fs.realpath(output).catch(() => path.resolve(output));
+    const sameResolvedPath = process.platform === "win32"
+      ? realInput.toLowerCase() === realOutput.toLowerCase()
+      : realInput === realOutput;
+    const [inputStat, outputStat] = await Promise.all([
+      fs.stat(input),
+      fs.stat(output).catch(() => null)
+    ]);
+    if (sameResolvedPath || (outputStat && inputStat.dev === outputStat.dev && inputStat.ino === outputStat.ino)) {
+      throw new Error("輸出檔不能覆蓋來源檔或其硬連結。");
+    }
     await fs.access(input);
     if (control.cancelRequested) return { ok: false, cancelled: true };
     return await new Promise(resolve => {
