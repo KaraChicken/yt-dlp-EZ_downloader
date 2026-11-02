@@ -5,7 +5,8 @@ const path = require("node:path");
 const { fileURLToPath } = require("node:url");
 const { validateUrl, normalizeOptions, isYtDlpVersionSafe, buildArgs } = require("./security");
 
-const activeProcesses = new Map();
+const activeJobs = new Map();
+let activeJobId = null;
 const approvedOutputDirs = new Map();
 const INFO_TIMEOUT_MS = 45000;
 
@@ -82,7 +83,16 @@ ipcMain.handle("check-tools", async event => {
     getYtDlpVersion().catch(() => null),
     runCommand("ffmpeg", ["-version"], 10000).then(() => true).catch(() => false)
   ]);
-  return { ytDlp: !!version, ytDlpVersion: version, ytDlpSafe: !!version && isYtDlpVersionSafe(version), ffmpeg };
+  const [ffprobe, deno, nodeRuntime] = await Promise.all([
+    runCommand("ffprobe", ["-version"], 10000).then(() => true).catch(() => false),
+    runCommand("deno", ["--version"], 10000).then(() => true).catch(() => false),
+    runCommand("node", ["--version"], 10000).then(() => true).catch(() => false)
+  ]);
+  return {
+    ytDlp: !!version, ytDlpVersion: version, ytDlpSafe: !!version && isYtDlpVersionSafe(version),
+    ffmpeg, ffprobe, jsRuntime: deno ? "deno" : nodeRuntime ? "node" : null,
+    defaultOutputPath: app.getPath("downloads")
+  };
 });
 ipcMain.handle("choose-folder", async event => {
   assertTrustedSender(event);
@@ -118,88 +128,83 @@ ipcMain.handle("get-info", async (event, payload) => {
 });
 ipcMain.handle("cancel-download", event => {
   assertTrustedSender(event);
-  const child = activeProcesses.get(event.sender.id);
-  if (!child) return false;
-  if (process.platform === "win32" && child.pid) {
-    execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
-  } else if (child.pid) {
-    try { process.kill(-child.pid, "SIGTERM"); }
-    catch { try { child.kill("SIGTERM"); } catch {} }
-  } else child.kill("SIGTERM");
+  const job = activeJobs.get(event.sender.id);
+  if (!job) return false;
+  job.cancelRequested = true;
+  if (job.child?.pid) {
+    if (process.platform === "win32") {
+      execFile("taskkill", ["/pid", String(job.child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+    } else {
+      try { process.kill(-job.child.pid, "SIGTERM"); }
+      catch { try { job.child.kill("SIGTERM"); } catch {} }
+    }
+  }
   return true;
 });
 ipcMain.handle("start-download", async (event, job) => {
   assertTrustedSender(event);
-  if (activeProcesses.size > 0) return { ok: false, error: "目前已有下載程序執行中，請等待完成或先取消。" };
-  let url, options, outputDir;
+  // Reserve the single global slot synchronously, before the first await.
+  if (activeJobId !== null) return { ok: false, error: "目前已有下載工作執行中，請等待完成或先取消。" };
+  const jobId = event.sender.id;
+  const control = { cancelRequested: false, child: null };
+  activeJobId = jobId;
+  activeJobs.set(jobId, control);
+  const isCancelled = () => control.cancelRequested || event.sender.isDestroyed();
   try {
     if (!job || typeof job !== "object" || Array.isArray(job)) throw new Error("下載工作格式錯誤。");
-    url = validateUrl(job.url);
-    outputDir = await resolveOutputDir(event.sender.id, job.options?.outputPath);
-    options = normalizeOptions(job.options || {}, outputDir);
+    const url = validateUrl(job.url);
+    const outputDir = await resolveOutputDir(jobId, job.options?.outputPath);
+    if (isCancelled()) return { ok: false, cancelled: true, error: "下載已取消。" };
+    const options = normalizeOptions(job.options || {}, outputDir);
     const version = await getYtDlpVersion();
-    if (!isYtDlpVersionSafe(version)) {
-      throw new Error("yt-dlp 版本過舊或無法辨識。請升級至 2026.07.04 或更新版本後再下載。");
-    }
-  } catch (error) { return { ok: false, error: error.message }; }
-
-  const args = buildArgs(options, url, outputDir, path.join(app.getPath("userData"), "download-archive.txt"));
-  sendTo(event.sender, "download-log", "\n開始下載：" + url + "\n（命令列參數由安全 GUI 設定產生；不接受自訂參數）\n");
-  return new Promise(resolve => {
-    const child = spawn("yt-dlp", args, {
-      windowsHide: true, detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    activeProcesses.set(event.sender.id, child);
-    let settled = false, buffer = "";
-    const finish = result => {
-      if (settled) return;
-      settled = true;
-      if (activeProcesses.get(event.sender.id) === child) activeProcesses.delete(event.sender.id);
-      resolve(result);
-    };
-    const onData = chunk => {
-      buffer += chunk.toString();
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        sendTo(event.sender, "download-log", line.slice(0, 4000));
-        if (/%/.test(line)) sendTo(event.sender, "download-progress", progress(line));
-      }
-    };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
-    child.on("error", error => {
-      sendTo(event.sender, "download-log", "程序啟動失敗：" + error.message);
-      sendTo(event.sender, "download-complete", { message: "下載啟動失敗" });
-      finish({ ok: false, error: error.message });
-    });
-    child.on("close", code => {
-      const ok = code === 0;
-      sendTo(event.sender, "download-complete", { message: ok ? "下載完成" : "下載失敗或已取消" });
-      finish({ ok, error: ok ? null : "exit code " + code });
-    });
-  });
-});
-
-app.whenReady().then(() => {
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        "Content-Security-Policy": ["default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'"]
+    if (isCancelled()) return { ok: false, cancelled: true, error: "下載已取消。" };
+    if (!isYtDlpVersionSafe(version)) throw new Error("yt-dlp 版本過舊或無法辨識。請升級至 2026.07.04 或更新版本後再下載。");
+    const args = buildArgs(options, url, outputDir, path.join(app.getPath("userData"), "download-archive.txt"));
+    if (isCancelled()) return { ok: false, cancelled: true, error: "下載已取消。" };
+    sendTo(event.sender, "download-log", "\\n開始下載：" + url + "\\n（命令列參數由安全 GUI 設定產生；不接受自訂參數）\\n");
+    return await new Promise(resolve => {
+      const child = spawn("yt-dlp", args, {
+        windowsHide: true, detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"]
+      });
+      control.child = child;
+      let settled = false, buffer = "";
+      const finish = result => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      const onData = chunk => {
+        buffer += chunk.toString();
+        const lines = buffer.split(/\\r?\\n/);
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          sendTo(event.sender, "download-log", line.slice(0, 4000));
+          if (/%/.test(line)) sendTo(event.sender, "download-progress", progress(line));
+        }
+      };
+      child.stdout.on("data", onData);
+      child.stderr.on("data", onData);
+      child.on("error", error => {
+        sendTo(event.sender, "download-log", "程序啟動失敗：" + error.message);
+        sendTo(event.sender, "download-complete", { message: "下載啟動失敗" });
+        finish({ ok: false, error: error.message });
+      });
+      child.on("close", code => {
+        const ok = code === 0 && !control.cancelRequested;
+        sendTo(event.sender, "download-complete", { message: ok ? "下載完成" : control.cancelRequested ? "已取消下載" : "下載失敗" });
+        finish({ ok, cancelled: control.cancelRequested, error: ok ? null : "exit code " + code });
+      });
+      if (control.cancelRequested) {
+        if (child.pid && process.platform !== "win32") { try { process.kill(-child.pid, "SIGTERM"); } catch {} }
+        else if (child.pid) execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
       }
     });
-  });
-  createWindow();
-});
-app.on("before-quit", () => {
-  for (const child of activeProcesses.values()) {
-    if (!child.pid) continue;
-    if (process.platform === "win32") execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
-    else { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
+  } catch (error) {
+    return { ok: false, cancelled: isCancelled(), error: error.message };
+  } finally {
+    if (activeJobs.get(jobId) === control) activeJobs.delete(jobId);
+    if (activeJobId === jobId) activeJobId = null;
   }
 });
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
