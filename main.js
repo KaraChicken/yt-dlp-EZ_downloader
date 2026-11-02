@@ -120,7 +120,6 @@ ipcMain.handle("convert-media", async (event, format) => {
     const result = await dialog.showSaveDialog(win, {
       defaultPath: path.join(path.dirname(input), path.basename(input, path.extname(input)) + "." + format),
       filters: [{ name: format.toUpperCase(), extensions: [format] }],
-      properties: ["showOverwriteConfirmation"]
     });
     if (result.canceled || !result.filePath || control.cancelRequested) return { ok: false, cancelled: true };
     const output = path.resolve(result.filePath);
