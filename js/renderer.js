@@ -28,7 +28,11 @@ function renderQueue() {
     '</span><span class="queue-url" title="' + esc(item.url) + '">' +
     esc(item.url) + '</span><span class="queue-status">' +
     (index === state.current ? "下載中" : item.status) +
-    '</span><button class="button ghost small queue-remove" data-remove="' + index + '" ' +
+    '</span><button class="button ghost small queue-move" data-move="up" data-index="' + index + '" ' +
+    (state.running || index === 0 ? "disabled" : "") + '>上移</button>' +
+    '<button class="button ghost small queue-move" data-move="down" data-index="' + index + '" ' +
+    (state.running || index === state.queue.length - 1 ? "disabled" : "") + '>下移</button>' +
+    '<button class="button ghost small queue-remove" data-remove="' + index + '" ' +
     (state.running ? "disabled" : "") + '>移除</button></div>'
   ).join("");
 }
@@ -71,8 +75,20 @@ $("clear-queue").addEventListener("click", () => {
   log("已清空下載佇列");
 });
 $("queue").addEventListener("click", event => {
+  if (state.running) return;
+  const move = event.target.closest("[data-move]");
+  if (move) {
+    const from = Number(move.dataset.index);
+    const to = from + (move.dataset.move === "up" ? -1 : 1);
+    if (Number.isInteger(from) && to >= 0 && to < state.queue.length) {
+      const [item] = state.queue.splice(from, 1);
+      state.queue.splice(to, 0, item);
+      renderQueue();
+    }
+    return;
+  }
   const button = event.target.closest("[data-remove]");
-  if (!button || state.running) return;
+  if (!button) return;
   const index = Number(button.dataset.remove);
   if (Number.isInteger(index) && index >= 0 && index < state.queue.length) {
     state.queue.splice(index, 1);
