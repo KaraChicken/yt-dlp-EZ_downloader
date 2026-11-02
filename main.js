@@ -208,3 +208,27 @@ ipcMain.handle("start-download", async (event, job) => {
     if (activeJobId === jobId) activeJobId = null;
   }
 });
+
+
+app.whenReady().then(() => {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": ["default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'; connect-src 'none'"]
+      }
+    });
+  });
+  createWindow();
+});
+app.on("before-quit", () => {
+  for (const job of activeJobs.values()) {
+    job.cancelRequested = true;
+    const child = job.child;
+    if (!child?.pid) continue;
+    if (process.platform === "win32") execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+    else { try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); } }
+  }
+});
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
+app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
