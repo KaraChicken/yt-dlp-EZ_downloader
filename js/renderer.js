@@ -193,6 +193,63 @@ state.unsubscribers.push(
   window.ytDlp.onLog(log),
   window.ytDlp.onComplete(data => log(data.message || data))
 );
+
+let mediaLoaded = false;
+let conversionRunning = false;
+const mediaElements = [$("media-player"), $("audio-player")];
+$("open-media").addEventListener("click", async () => {
+  try {
+    const selected = await window.ytDlp.chooseMediaFile();
+    if (!selected) return;
+    mediaElements.forEach(player => { player.pause(); player.removeAttribute("src"); player.load(); player.classList.add("hidden"); });
+    const isAudio = /\.(mp3|m4a|aac|wav|flac|ogg|opus)$/i.test(selected.name);
+    const player = isAudio ? $("audio-player") : $("media-player");
+    player.src = selected.url;
+    player.classList.remove("hidden");
+    $("media-file-name").textContent = selected.name;
+    mediaLoaded = true;
+    $("conversion-status").textContent = "已選擇來源檔案：" + selected.name;
+  } catch (error) { log(error.message); }
+});
+$("convert-btn").addEventListener("click", async () => {
+  if (!mediaLoaded || conversionRunning) {
+    $("conversion-status").textContent = mediaLoaded ? "轉檔工作正在執行。" : "請先開啟本機影音檔案。";
+    return;
+  }
+  conversionRunning = true;
+  $("convert-btn").disabled = true;
+  $("conversion-format").disabled = true;
+  $("cancel-conversion-btn").classList.remove("hidden");
+  $("conversion-status").textContent = "正在準備轉檔與選擇輸出位置…";
+  $("conversion-log").textContent = "";
+  try {
+    const result = await window.ytDlp.convertMedia($("conversion-format").value);
+    if (result.cancelled) $("conversion-status").textContent = "已取消轉檔。";
+    else if (result.ok) $("conversion-status").textContent = "轉檔完成：" + result.output;
+    else $("conversion-status").textContent = "轉檔失敗：" + (result.error || "請確認 FFmpeg 與輸出格式支援。");
+  } catch (error) { $("conversion-status").textContent = "轉檔失敗：" + error.message; }
+  finally {
+    conversionRunning = false;
+    $("convert-btn").disabled = false;
+    $("conversion-format").disabled = false;
+    $("cancel-conversion-btn").classList.add("hidden");
+  }
+});
+$("cancel-conversion-btn").addEventListener("click", async () => {
+  const accepted = await window.ytDlp.cancelConversion();
+  $("conversion-status").textContent = accepted ? "已送出取消要求…" : "目前沒有可取消的轉檔。";
+});
+state.unsubscribers.push(
+  window.ytDlp.onConversionProgress(data => {
+    if (data.done) $("conversion-status").textContent = "轉檔即將完成…";
+    else if (Number.isFinite(data.seconds)) $("conversion-status").textContent = "轉檔中，已處理 " + Math.floor(data.seconds) + " 秒媒體時間";
+  }),
+  window.ytDlp.onConversionLog(data => {
+    $("conversion-log").textContent = ($("conversion-log").textContent + data).slice(-12000);
+    $("conversion-log").scrollTop = $("conversion-log").scrollHeight;
+  })
+);
+
 window.addEventListener("beforeunload", () => state.unsubscribers.forEach(unsubscribe => unsubscribe()));
 (async () => {
   try {
