@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, session } = require("electron");
 const { spawn, execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { fileURLToPath } = require("node:url");
 const { validateUrl, normalizeOptions, isYtDlpVersionSafe, buildArgs } = require("./security");
 
 const activeProcesses = new Map();
@@ -13,7 +14,7 @@ function isTrustedSender(event) {
   if (!frame || frame !== event.sender.mainFrame) return false;
   try {
     const url = new URL(frame.url);
-    return url.protocol === "file:" && path.resolve(decodeURIComponent(url.pathname)) === path.resolve(__dirname, "index.html");
+    return url.protocol === "file:" && path.resolve(fileURLToPath(frame.url)) === path.resolve(__dirname, "index.html");
   } catch { return false; }
 }
 function assertTrustedSender(event) {

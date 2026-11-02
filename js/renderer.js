@@ -164,7 +164,7 @@ window.addEventListener("beforeunload", () => state.unsubscribers.forEach(unsubs
       log("請先安裝 yt-dlp，並確認可從 PATH 執行。");
     } else if (!result.ytDlpSafe) {
       $("tool-status").textContent = "yt-dlp 版本過舊";
-      log("安全要求：請將 yt-dlp 更新至 2026.06.09 或更新版本。偵測版本：" + result.ytDlpVersion);
+      log("安全要求：請將 yt-dlp 更新至 2026.07.04 或更新版本。偵測版本：" + result.ytDlpVersion);
     } else {
       $("tool-status").textContent = "yt-dlp " + result.ytDlpVersion;
     }

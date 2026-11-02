@@ -7,7 +7,7 @@
 - 移除額外 yt-dlp 參數及自由格式 selector；下載命令只由 GUI 白名單設定產生。
 - 僅允許 HTTP / HTTPS 來源網址。
 - yt-dlp 執行時強制使用 \`--ignore-config\`，避免使用者層級設定檔注入隱藏參數。
-- 最低要求 yt-dlp **2026.06.09**，低於此版本或無法辨識版本時拒絕下載。
+- 最低要求 yt-dlp **2026.07.04**，低於此版本或無法辨識版本時拒絕下載。
 - Electron 升級至 45.2.1，啟用 sandbox、context isolation、停用 Node integration。
 - 限制 IPC 來源、導覽及新視窗；補強 CSP。
 - 輸出目錄必須由原生資料夾選擇器核准。
@@ -32,7 +32,7 @@
 
 ## 使用前
 
-系統必須能執行 yt-dlp 2026.06.09 或更新版本。FFmpeg / FFprobe 強烈建議安裝；完整 YouTube 支援也可能需要 yt-dlp-ejs 與 JavaScript runtime。
+系統必須能執行 yt-dlp 2026.07.04 或更新版本。FFmpeg / FFprobe 強烈建議安裝；完整 YouTube 支援也可能需要 yt-dlp-ejs 與 JavaScript runtime。
 
 官方專案：<https://github.com/yt-dlp/yt-dlp>
 
