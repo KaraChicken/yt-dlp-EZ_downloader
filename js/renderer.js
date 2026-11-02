@@ -269,7 +269,13 @@ window.addEventListener("beforeunload", () => state.unsubscribers.forEach(unsubs
     } else {
       $("tool-status").textContent = "yt-dlp " + result.ytDlpVersion;
     }
-    if (!result.ffmpeg) log("提示：找不到 FFmpeg；合併影音或音訊轉檔可能失敗。");
+    if (!result.ffmpeg) {
+      log("提示：找不到 FFmpeg；合併影音、音訊抽取及本機轉檔無法使用。");
+      $("convert-btn").disabled = true;
+      $("conversion-status").textContent = "未偵測到 FFmpeg，請安裝後重新啟動程式。";
+    } else {
+      $("convert-btn").disabled = false;
+    }
     if (!result.ffprobe) log("提示：找不到 FFprobe；部分媒體資訊與後處理功能可能受影響。");
     if (!result.jsRuntime) log("提示：未偵測到 Deno 或 Node.js；YouTube 部分格式可能需要 JavaScript runtime。");
     $("output-path").value = result.defaultOutputPath || "";
