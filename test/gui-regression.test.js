@@ -27,6 +27,8 @@ test("queue supports removing one item and clearing all items", () => {
   assert.match(html, /id="clear-queue"/);
   assert.match(renderer, /data-remove/);
   assert.match(renderer, /state\.queue\.splice\(index, 1\)/);
+  assert.match(renderer, /data-move="up"/);
+  assert.match(renderer, /data-move="down"/);
   assert.match(renderer, /state\.queue = \[\]/);
 });
 
