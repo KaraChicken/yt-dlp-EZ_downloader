@@ -18,7 +18,9 @@ test("conversion format is allowlisted and never invokes a shell", () => {
   assert.match(main, /Object\.hasOwn\(CONVERSION_FORMATS, format\)/);
   assert.match(main, /spawn\("ffmpeg", args/);
   assert.doesNotMatch(main, /exec\(["']ffmpeg/);
-  assert.match(main, /path\.extname\(output\)\.toLowerCase\(\) !== "\." \+ format/);\n  assert.match(main, /inputStat\.dev === outputStat\.dev/);\n  assert.match(main, /"-n","-i",input/);
+  assert.match(main, /path\.extname\(output\)\.toLowerCase\(\) !== "\." \+ format/);
+  assert.match(main, /inputStat\.dev === outputStat\.dev/);
+  assert.match(main, /"-n","-i",input/);
 });
 
 test("conversion reserves the job lock before awaiting the save dialog", () => {
