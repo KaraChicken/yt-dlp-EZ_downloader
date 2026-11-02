@@ -37,7 +37,7 @@
 
 ## 使用前
 
-系統必須能執行 yt-dlp 2026.07.04 或更新版本。FFmpeg / FFprobe 強烈建議安裝；完整 YouTube 支援也可能需要 yt-dlp-ejs 與 JavaScript runtime。
+系統必須能執行 yt-dlp 2026.07.04 或更新版本。FFmpeg 是影音合併、音訊抽取及本機轉檔的必要工具；FFprobe 強烈建議安裝。完整 YouTube 支援也可能需要 yt-dlp-ejs 與 JavaScript runtime。
 
 官方專案：<https://github.com/yt-dlp/yt-dlp>
 
