@@ -33,6 +33,8 @@
 - Chrome / Edge / Firefox / Brave cookies
 - 即時進度、速度、ETA 與執行日誌
 - 取消目前下載
+- 本機影音播放：透過原生檔案選擇器載入影音檔，支援原生播放控制、暫停、音量與定位
+- 本機影音轉檔：透過 FFmpeg 輸出 MP4、MKV、WebM、MP3、M4A、WAV、FLAC、Opus，支援進度回報與取消
 - Windows / macOS / Linux Electron 打包
 
 ## 使用前
