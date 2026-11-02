@@ -20,12 +20,12 @@
     <section class="card">
       <div class="section-title">
         <div><span class="step">01</span><h2>加入下載</h2></div>
-        <button id="clear-urls" class="button ghost small">清除</button>
+        <button id="clear-urls" class="button ghost small">清除輸入</button>
       </div>
       <label for="video-url">影片 / 播放清單網址</label>
       <div class="url-row">
         <textarea id="video-url" rows="3" placeholder="貼上 URL，可一次輸入多個網址，每行一個"></textarea>
-        <button id="inspect-btn" class="button secondary">解析資訊</button>
+        <button id="inspect-btn" class="button secondary">解析第一個網址</button>
       </div>
       <div id="media-info" class="media-info hidden"></div>
     </section>
@@ -110,6 +110,7 @@
         <div><span class="step">04</span><h2>下載佇列</h2></div>
         <div class="queue-actions">
           <button id="add-queue" class="button ghost">加入佇列</button>
+          <button id="clear-queue" class="button ghost">清空佇列</button>
           <button id="download-btn" class="button primary">開始下載</button>
           <button id="cancel-btn" class="button danger hidden">取消</button>
         </div>
