@@ -75,7 +75,7 @@ function createWindow() {
     if (targetUrl !== win.webContents.getURL()) event.preventDefault();
   });
   win.webContents.on("will-attach-webview", event => event.preventDefault());
-  win.on("closed", () => approvedOutputDirs.delete(win.webContents.id); selectedMediaFiles.delete(win.webContents.id));
+  win.on("closed", () => { approvedOutputDirs.delete(win.webContents.id); selectedMediaFiles.delete(win.webContents.id); });
   win.loadFile(path.join(__dirname, "index.html"));
 }
 
@@ -129,7 +129,7 @@ ipcMain.handle("convert-media", async (event, format) => {
     await fs.access(input);
     if (control.cancelRequested) return { ok: false, cancelled: true };
     return await new Promise(resolve => {
-      const args = ["-hide_banner","-nostdin","-n","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
+      const args = ["-hide_banner","-nostdin","-y","-i",input,...CONVERSION_FORMATS[format],"-progress","pipe:1","-nostats",output];
       const child = spawn("ffmpeg", args, { windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore","pipe","pipe"] });
       control.child = child;
       let outputBuffer = "", errorBuffer = "", settled = false;
@@ -321,7 +321,7 @@ app.whenReady().then(() => {
   createWindow();
 });
 app.on("before-quit", () => {
-  for (const job of activeJobs.values()) {
+  for (const job of conversionJobs.values()) {\n    job.cancelRequested = true;\n    if (job.child?.pid) {\n      if (process.platform === "win32") execFile("taskkill", ["/pid", String(job.child.pid), "/T", "/F"], { windowsHide: true }, () => {});\n      else { try { process.kill(-job.child.pid, "SIGTERM"); } catch { job.child.kill("SIGTERM"); } }\n    }\n  }\n  for (const job of activeJobs.values()) {
     job.cancelRequested = true;
     const child = job.child;
     if (!child?.pid) continue;
