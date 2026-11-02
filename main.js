@@ -321,7 +321,14 @@ app.whenReady().then(() => {
   createWindow();
 });
 app.on("before-quit", () => {
-  for (const job of conversionJobs.values()) {\n    job.cancelRequested = true;\n    if (job.child?.pid) {\n      if (process.platform === "win32") execFile("taskkill", ["/pid", String(job.child.pid), "/T", "/F"], { windowsHide: true }, () => {});\n      else { try { process.kill(-job.child.pid, "SIGTERM"); } catch { job.child.kill("SIGTERM"); } }\n    }\n  }\n  for (const job of activeJobs.values()) {
+  for (const job of conversionJobs.values()) {
+    job.cancelRequested = true;
+    if (job.child?.pid) {
+      if (process.platform === "win32") execFile("taskkill", ["/pid", String(job.child.pid), "/T", "/F"], { windowsHide: true }, () => {});
+      else { try { process.kill(-job.child.pid, "SIGTERM"); } catch { job.child.kill("SIGTERM"); } }
+    }
+  }
+  for (const job of activeJobs.values()) {
     job.cancelRequested = true;
     const child = job.child;
     if (!child?.pid) continue;
